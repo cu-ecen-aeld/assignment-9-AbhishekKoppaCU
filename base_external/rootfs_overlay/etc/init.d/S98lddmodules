@@ -1,0 +1,96 @@
+#!/bin/sh
+
+# Function to choose the correct group (staff or wheel)
+choose_group()
+{
+    if grep -q '^staff:' /etc/group; then
+        echo "staff"
+    else
+        echo "wheel"
+    fi
+}
+
+# Function to initialize scull device nodes
+init_scull_devices()
+{
+    major=$1
+    grp=$2
+    perm=664
+
+    devices="scull0 scull1 scull2 scull3 scullpipe0 scullpipe1 scullpipe2 scullpipe3 scullsingle sculluid scullwuid scullpriv"
+
+    rm -f /dev/scull /dev/scullpipe
+
+    i=0
+    for dev in $devices; do
+        rm -f /dev/$dev
+        mknod /dev/$dev c "$major" "$i"
+        chgrp "$grp" /dev/$dev
+        chmod "$perm" /dev/$dev
+        i=$(expr $i + 1)
+    done
+
+    ln -sf scull0 /dev/scull
+    ln -sf scullpipe0 /dev/scullpipe
+}
+
+# Function to remove scull device nodes
+remove_scull_devices()
+{
+    rm -f /dev/scull /dev/scullpipe /dev/scull[0-3] \
+          /dev/scullpipe[0-3] /dev/scullsingle \
+          /dev/sculluid /dev/scullwuid /dev/scullpriv
+}
+
+# Function to load a module and create its device node
+load_mod()
+{
+    modName=$1
+    modprobe "$modName" || exit 1
+    foundMajor=$(awk '$2=="'"$modName"'" {print $1}' /proc/devices)
+    [ -z "$foundMajor" ] && return
+    if [ "$modName" = "scull" ]; then
+        init_scull_devices "$foundMajor" "$MAIN_GROUP"
+    else
+        rm -f /dev/$modName
+        mknod /dev/$modName c "$foundMajor" 0
+        chgrp "$MAIN_GROUP" /dev/$modName
+        chmod 664 /dev/$modName
+    fi
+}
+
+# Function to unload a module and remove its device node
+unload_mod()
+{
+    modName=$1
+    modprobe -r "$modName" || exit 1
+    if [ "$modName" = "scull" ]; then
+        remove_scull_devices
+    else
+        rm -f /dev/$modName
+    fi
+}
+
+# Main execution
+MAIN_GROUP=$(choose_group)
+[ $# -eq 1 ] || { echo "Usage: $0 {start|stop}"; exit 1; }
+
+case "$1" in
+    start)
+        for mod in scull faulty hello; do
+            load_mod "$mod"
+        done
+        ;;
+    stop)
+        for mod in hello faulty scull; do
+            unload_mod "$mod"
+        done
+        ;;
+    *)
+        echo "Usage: $0 {start|stop}"
+        exit 1
+        ;;
+esac
+
+exit 0
+
